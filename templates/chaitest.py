@@ -3,9 +3,11 @@ import io
 
 import matplotlib
 import numpy as np
+from PIL import Image
 from scipy import stats
 from flask import jsonify
 from matplotlib import pyplot as plt
+from reportlab.pdfgen import canvas
 from scipy.stats import chi2_contingency, chi2
 
 matplotlib.use('Agg')
@@ -70,24 +72,65 @@ class ChiCalculator:
             o_value = self._data['observable_value']
             contingency_table = o_value
             chi2_stat, p_value, dof, expected = chi2_contingency(contingency_table)
-
             format_chi2_stat = "{:.3f}".format(float(chi2_stat))
             format_p_value = "{:.3f}".format(float(p_value))
-
             if float(p_value) < float(self.alpha_value):
                 hypothesis_result = 'Reject Null Hypothesis'
             else:
                 hypothesis_result = 'Accept Null Hypothesis'
-
-            return jsonify({'chi_value': format_chi2_stat, 'p_value': p_value, 'degree_of_freedom': dof,
+            results = {'chi_value': format_chi2_stat, 'p_value': p_value, 'degree_of_freedom': dof,
                             'expected_value': expected.tolist(),
                             'graph': ChiCalculator.plot_graph(p_value, chi2_stat, self.alpha_value, dof),
-                            'hypothesis': hypothesis_result})
-
+                            'hypothesis': hypothesis_result}
+            pdf_report = self._generate_report(results)
+            results['pdf_report'] = pdf_report
+            return jsonify(results)
         except ValueError:
             return jsonify(
                 {'message': 'Please ensure that the data you have entered is correct. '
                             '-> Trace Log at chi_square_test.'})
+
+    def _to_decode(self, to_decode):
+        # Decode base64 string
+        decoded_data = base64.b64decode(to_decode)
+        # Create an in-memory Image object from the decoded data
+        image = Image.open(io.BytesIO(decoded_data))
+        return image
+
+    def _generate_report(self, results):
+        try:
+            # Create a PDF report
+            buffer = io.BytesIO()
+            generate_pdf = canvas.Canvas(buffer)
+            # Add title
+            generate_pdf.setFont('Helvetica', 16)
+            generate_pdf.drawString(180, 750, 'Chi-Square Test of Independence')
+            # Add results
+            generate_pdf.setFont('Helvetica', 12)
+            y_position = 700
+            for i, j in results.items():
+                if i == 'graph':
+                    to_decode = j
+                    temp = self._to_decode(to_decode)
+                    generate_pdf.drawInlineImage(self._to_decode(to_decode), 100, y_position - 220, width=390, height=230)
+                    y_position -= 240  # Adjust the vertical position after drawing the graph
+                    continue
+                if i == 'expected_value':
+                    generate_pdf.drawString(100, y_position, f'Expected Value:')
+                    y_position -= 20
+                    for k in j:
+                        generate_pdf.drawString(100, y_position, f'{k}')
+                        y_position -= 20
+                    continue
+                generate_pdf.drawString(100, y_position, f'{i}: {j}')
+                y_position -= 20
+            # save PDF
+            generate_pdf.save()
+            buffer.seek(0)
+            base64_pdf = base64.b64encode(buffer.read()).decode('utf-8')
+            return base64_pdf
+        except ValueError:
+            return 'Please ensure that the data you have entered is correct -> Trace Log at _generate_report.'
 
     @staticmethod
     def plot_graph(p_value, chi2_stat, a_value, dof):
